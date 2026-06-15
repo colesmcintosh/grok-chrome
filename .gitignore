@@ -1,0 +1,30 @@
+node_modules/
+dist/
+.tmp/
+.DS_Store
+coverage/
+
+# Local environment and secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Local editor and OS files
+.idea/
+.vscode/
+
+# Local AI coding-agent/tooling artifacts
+.agents/
+.claude/
+.codex/
+.continue/
+.cursor/
+.roo/
+.windsurf/
+AGENTS.md
+AGENTS.override.md
+CLAUDE.md
+GEMINI.md
+.aider*
+.mcp.json

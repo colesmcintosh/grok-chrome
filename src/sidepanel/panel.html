@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Grok Chrome</title>
+    <link rel="stylesheet" href="./panel.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">xAI</div>
+          <div class="brand-copy">
+            <h1>Grok Chrome</h1>
+            <p id="tabMeta">No active tab</p>
+          </div>
+        </div>
+        <button class="settings-button" id="settingsToggle" type="button" aria-label="Settings">Settings</button>
+      </header>
+
+      <section class="settings-panel" id="settingsPanel" hidden>
+        <form id="settingsForm" class="settings-form">
+          <label>
+            <span>API key</span>
+            <input id="apiKeyInput" name="apiKey" type="password" autocomplete="off" placeholder="xai-..." spellcheck="false">
+          </label>
+          <label>
+            <span>Model</span>
+            <input id="modelInput" name="model" type="text" autocomplete="off" spellcheck="false">
+          </label>
+          <label>
+            <span>Max steps</span>
+            <input id="maxStepsInput" name="maxSteps" type="number" min="1" max="12" step="1">
+          </label>
+          <div class="settings-actions">
+            <button class="secondary-button" id="clearKeyButton" type="button">Clear key</button>
+            <button class="primary-button" type="submit">Save</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="setup" id="setupView" hidden>
+        <div class="setup-plate">
+          <div class="setup-kicker">API access</div>
+          <h2>Connect Grok</h2>
+          <form id="setupForm" class="setup-form">
+            <input id="setupApiKeyInput" type="password" autocomplete="off" placeholder="xai-..." spellcheck="false" aria-label="xAI API key">
+            <button class="primary-button" type="submit">Start</button>
+          </form>
+          <p>Stored locally in Chrome. Page snapshots are sent to xAI when you chat.</p>
+        </div>
+      </section>
+
+      <section class="chat" id="chatView" hidden>
+        <div class="status-strip">
+          <span class="status-pill" id="keyStatus">Key missing</span>
+          <span class="status-pill accent" id="modelStatus">grok-4.3</span>
+        </div>
+
+        <div class="messages" id="messages" aria-live="polite"></div>
+
+        <form class="composer" id="composer">
+          <textarea id="promptInput" rows="1" placeholder="Ask Grok" spellcheck="true"></textarea>
+          <button class="send-button" id="sendButton" type="submit" aria-label="Send">Send</button>
+        </form>
+      </section>
+    </main>
+
+    <template id="messageTemplate">
+      <article class="message">
+        <div class="message-role"></div>
+        <div class="message-body"></div>
+      </article>
+    </template>
+
+    <template id="approvalTemplate">
+      <article class="approval">
+        <div class="approval-header">
+          <span>Approve</span>
+          <span class="approval-count"></span>
+        </div>
+        <div class="approval-actions"></div>
+        <div class="approval-buttons">
+          <button class="secondary-button cancel-action" type="button">Cancel</button>
+          <button class="primary-button approve-action" type="button">Run</button>
+        </div>
+      </article>
+    </template>
+
+    <script type="module" src="./panel.js"></script>
+  </body>
+</html>

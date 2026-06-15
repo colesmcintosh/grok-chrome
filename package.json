@@ -1,0 +1,39 @@
+{
+  "name": "grok-chrome",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A Chrome side-panel agent that lets xAI Grok inspect and operate the current browser tab with user-approved actions.",
+  "author": "Cole McIntosh",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/colesmcintosh/grok-chrome.git"
+  },
+  "bugs": {
+    "url": "https://github.com/colesmcintosh/grok-chrome/issues"
+  },
+  "homepage": "https://github.com/colesmcintosh/grok-chrome#readme",
+  "keywords": [
+    "chrome-extension",
+    "grok",
+    "xai",
+    "browser-agent",
+    "vercel-ai-sdk"
+  ],
+  "scripts": {
+    "build": "bun scripts/build.mjs",
+    "test": "bun test",
+    "check": "bun run build && bun test && node --check dist/background/service-worker.js && node --check src/content/page-tools.js && node --check src/sidepanel/panel.js && node --check src/shared/agent-protocol.js"
+  },
+  "dependencies": {
+    "@ai-sdk/xai": "^2.0.0",
+    "ai": "^6.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  },
+  "engines": {
+    "bun": ">=1.3.5",
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Grok Chrome",
+  "version": "0.1.0",
+  "description": "Chat with xAI Grok in Chrome and approve browser actions from a side panel.",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "activeTab",
+    "sidePanel",
+    "scripting",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://api.x.ai/*",
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "dist/background/service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Open Grok Chrome"
+  },
+  "side_panel": {
+    "default_path": "src/sidepanel/panel.html"
+  }
+}

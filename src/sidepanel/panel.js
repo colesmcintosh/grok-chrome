@@ -172,7 +172,7 @@ async function sendPrompt() {
   }
 }
 
-async function approvePending() {
+async function approvePending(mode = "all") {
   if (!state.pending || state.busy) {
     return;
   }
@@ -183,7 +183,8 @@ async function approvePending() {
   try {
     const response = await sendRuntime({
       type: "agent:approve",
-      runId: state.pending.runId
+      runId: state.pending.runId,
+      mode
     });
     state.pending = null;
     addFailedObservationMessages(response.observations);
@@ -294,8 +295,11 @@ function renderMessages() {
 
 function renderApproval(pending) {
   const node = elements.approvalTemplate.content.firstElementChild.cloneNode(true);
-  node.querySelector(".approval-count").textContent = `${pending.actions.length}`;
+  const count = pending.actions.length;
+  node.querySelector(".approval-count").textContent = `${count} pending`;
   const list = node.querySelector(".approval-actions");
+  const approveOneButton = node.querySelector(".approve-one-action");
+  const approveAllButton = node.querySelector(".approve-all-actions");
 
   pending.actions.forEach((action, index) => {
     const row = document.createElement("div");
@@ -305,17 +309,59 @@ function renderApproval(pending) {
     number.className = "action-index";
     number.textContent = String(index + 1);
 
+    const content = document.createElement("div");
+    content.className = "action-content";
+
+    const topLine = document.createElement("div");
+    topLine.className = "action-topline";
+
     const summary = document.createElement("div");
     summary.className = "action-summary";
     summary.textContent = action.summary || action.tool;
 
-    row.append(number, summary);
+    const risk = document.createElement("span");
+    risk.className = "action-risk";
+    risk.textContent = action.detail?.risk || action.tool;
+
+    topLine.append(summary, risk);
+    content.append(topLine, renderActionDetails(action));
+
+    row.append(number, content);
     list.append(row);
   });
 
-  node.querySelector(".approve-action").addEventListener("click", approvePending);
+  approveOneButton.textContent = count === 1 ? "Run action" : "Run next";
+  approveAllButton.hidden = count <= 1;
+  approveOneButton.addEventListener("click", () => approvePending("one"));
+  approveAllButton.addEventListener("click", () => approvePending("all"));
   node.querySelector(".cancel-action").addEventListener("click", cancelPending);
   return node;
+}
+
+function renderActionDetails(action) {
+  const details = document.createElement("details");
+  details.className = "action-details";
+
+  const summary = document.createElement("summary");
+  summary.textContent = "Details";
+  details.append(summary);
+
+  const list = document.createElement("dl");
+  const rows = Array.isArray(action.detail?.details) ? action.detail.details : [];
+  const safeRows = rows.length > 0
+    ? rows
+    : [{ label: "Tool", value: action.tool }];
+
+  for (const row of safeRows) {
+    const label = document.createElement("dt");
+    label.textContent = row.label || "Detail";
+    const value = document.createElement("dd");
+    value.textContent = String(row.value || "");
+    list.append(label, value);
+  }
+
+  details.append(list);
+  return details;
 }
 
 function setBusy(isBusy) {

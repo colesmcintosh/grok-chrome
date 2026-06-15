@@ -192,9 +192,11 @@ async function approveRun(message) {
   }
 
   const actions = Array.isArray(run.pendingActions) ? run.pendingActions : [];
+  const maxActions = message.mode === "one" ? 1 : actions.length;
+  let pageChanged = false;
   run.pendingActions = [];
 
-  for (let index = 0; index < actions.length; index += 1) {
+  for (let index = 0; index < maxActions; index += 1) {
     const action = actions[index];
     const observation = await executeAction(run.tabId, action, run.lastSnapshot);
     run.observations.push(observation);
@@ -211,9 +213,22 @@ async function approveRun(message) {
       };
     }
 
-    if (observation.pageChanged && index < actions.length - 1) {
+    pageChanged = pageChanged || observation.pageChanged;
+    if (pageChanged && index < actions.length - 1) {
       break;
     }
+  }
+
+  const remainingActions = actions.slice(maxActions);
+  if (message.mode === "one" && !pageChanged && remainingActions.length > 0) {
+    run.pendingActions = remainingActions;
+    runs.set(run.id, run);
+    await persistRun(run);
+    return buildApprovalResponse(
+      run,
+      `Action completed. Review ${remainingActions.length} remaining action${remainingActions.length === 1 ? "" : "s"}.`,
+      run.lastSnapshot
+    );
   }
 
   return continueRun(run);
@@ -243,19 +258,12 @@ async function continueRun(run) {
     run.pendingActions = parsed.actions;
     runs.set(run.id, run);
     await persistRun(run);
-    return {
-      status: "needs_approval",
-      runId: run.id,
-      assistant: {
-        content: parsed.message || "I need to use the browser."
-      },
-      actions: parsed.actions.map((action) => ({
-        ...action,
-        summary: summarizeActionWithSnapshot(action, snapshot)
-      })),
-      observations: run.observations,
-      usage: completion.usage
-    };
+    return buildApprovalResponse(
+      run,
+      parsed.message || "I need to use the browser.",
+      snapshot,
+      completion.usage
+    );
   }
 
   await deleteRun(run.id);
@@ -267,6 +275,23 @@ async function continueRun(run) {
     },
     observations: run.observations,
     usage: completion.usage
+  };
+}
+
+function buildApprovalResponse(run, message, snapshot, usage = null) {
+  return {
+    status: "needs_approval",
+    runId: run.id,
+    assistant: {
+      content: message
+    },
+    actions: run.pendingActions.map((action) => ({
+      ...action,
+      summary: summarizeActionWithSnapshot(action, snapshot),
+      detail: describeActionForApproval(action, snapshot)
+    })),
+    observations: run.observations,
+    usage
   };
 }
 
@@ -454,6 +479,81 @@ function summarizeActionWithSnapshot(action, snapshot) {
     return `Choose ${action.args?.value || "an option"} in ${label}`;
   }
   return summarizeAction(action);
+}
+
+function describeActionForApproval(action, snapshot) {
+  const args = action.args || {};
+  const element = findSnapshotElement(snapshot, args.ref);
+  const target = elementLabel(element) || args.ref || "";
+  const details = [];
+
+  if (target) {
+    details.push({ label: "Target", value: target });
+  }
+
+  if (action.tool === "navigate") {
+    const host = hostFromUrl(args.url);
+    details.push({ label: "Destination", value: host || args.url || "Unknown URL" });
+  }
+
+  if (action.tool === "type") {
+    const length = typeof args.text === "string" ? args.text.length : 0;
+    details.push({ label: "Typed text", value: `${length} character${length === 1 ? "" : "s"}` });
+    details.push({ label: "Submit", value: args.submit ? "Yes" : "No" });
+  }
+
+  if (action.tool === "select" && args.value) {
+    details.push({ label: "Option", value: String(args.value) });
+  }
+
+  if (action.tool === "scroll") {
+    details.push({ label: "Direction", value: args.direction === "up" ? "Up" : "Down" });
+    const amount = Number(args.amount);
+    details.push({
+      label: "Amount",
+      value: Number.isFinite(amount) && amount > 0
+        ? `${Math.max(120, Math.min(1800, amount))} px`
+        : "Default"
+    });
+  }
+
+  if (action.tool === "wait") {
+    details.push({ label: "Duration", value: `${Math.min(Number(args.ms) || 1000, 5000)} ms` });
+  }
+
+  if (action.tool === "ask_user") {
+    details.push({ label: "Reason", value: args.question || "Manual input needed" });
+  }
+
+  return {
+    tool: action.tool,
+    risk: actionRisk(action),
+    details
+  };
+}
+
+function actionRisk(action) {
+  if (action.tool === "navigate") {
+    return "changes tab URL";
+  }
+  if (action.tool === "click" || action.tool === "select" || action.tool === "type") {
+    return action.args?.submit ? "may submit page data" : "changes page state";
+  }
+  if (action.tool === "scroll" || action.tool === "wait") {
+    return "view only";
+  }
+  if (action.tool === "ask_user") {
+    return "manual handoff";
+  }
+  return "browser action";
+}
+
+function hostFromUrl(value) {
+  try {
+    return new URL(value).hostname;
+  } catch {
+    return "";
+  }
 }
 
 function findSnapshotElement(snapshot, ref) {

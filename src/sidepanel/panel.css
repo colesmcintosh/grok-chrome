@@ -377,9 +377,9 @@ input {
   display: grid;
   grid-template-columns: 24px 1fr;
   gap: 10px;
-  align-items: center;
+  align-items: start;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: 18px;
   padding: 8px 10px;
   background: var(--canvas);
 }
@@ -401,6 +401,67 @@ input {
   font-size: 14px;
   line-height: 1.25;
   overflow-wrap: anywhere;
+}
+
+.action-content {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.action-topline {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.action-risk {
+  max-width: 118px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 7px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.1;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.action-details {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.action-details summary {
+  width: max-content;
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.action-details dl {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 5px 10px;
+  margin: 8px 0 2px;
+}
+
+.action-details dt,
+.action-details dd {
+  min-width: 0;
+  margin: 0;
+  line-height: 1.3;
+}
+
+.action-details dt {
+  color: var(--soft);
+  font-weight: 650;
+}
+
+.action-details dd {
+  overflow-wrap: anywhere;
+  color: var(--ink);
 }
 
 .composer {

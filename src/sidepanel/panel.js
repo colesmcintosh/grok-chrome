@@ -7,7 +7,13 @@ const state = {
   activeTab: null,
   messages: [],
   pending: null,
-  busy: false
+  busy: false,
+  activity: "Ready",
+  runMeta: {
+    stepCount: null,
+    maxSteps: null,
+    usage: null
+  }
 };
 
 const elements = {
@@ -25,6 +31,9 @@ const elements = {
   tabMeta: document.querySelector("#tabMeta"),
   keyStatus: document.querySelector("#keyStatus"),
   modelStatus: document.querySelector("#modelStatus"),
+  activityStatus: document.querySelector("#activityStatus"),
+  stepStatus: document.querySelector("#stepStatus"),
+  usageStatus: document.querySelector("#usageStatus"),
   messages: document.querySelector("#messages"),
   composer: document.querySelector("#composer"),
   promptInput: document.querySelector("#promptInput"),
@@ -154,10 +163,14 @@ async function sendPrompt() {
   elements.promptInput.value = "";
   elements.promptInput.style.height = "auto";
   pushMessage("user", prompt);
+  resetRunMeta();
   setBusy(true);
+  setActivity("Reading page");
   render();
 
   try {
+    setActivity("Planning");
+    render();
     const response = await sendRuntime({
       type: "agent:start",
       tabId: state.activeTab.id,
@@ -165,6 +178,7 @@ async function sendPrompt() {
     });
     handleAgentResponse(response);
   } catch (error) {
+    setActivity("Error");
     pushMessage("system", error.message || String(error));
   } finally {
     setBusy(false);
@@ -178,6 +192,7 @@ async function approvePending() {
   }
 
   setBusy(true);
+  setActivity("Running actions");
   render();
 
   try {
@@ -190,6 +205,7 @@ async function approvePending() {
     handleAgentResponse(response);
   } catch (error) {
     state.pending = null;
+    setActivity("Error");
     pushMessage("system", error.message || String(error));
   } finally {
     setBusy(false);
@@ -204,17 +220,21 @@ async function cancelPending() {
 
   const runId = state.pending.runId;
   state.pending = null;
+  setActivity("Ready");
   pushMessage("system", "Action batch cancelled.");
   render();
   await sendRuntime({ type: "agent:cancel", runId }).catch(() => {});
 }
 
 function handleAgentResponse(response) {
+  updateRunMeta(response);
+
   if (response.status === "needs_approval") {
     state.pending = {
       runId: response.runId,
       actions: response.actions || []
     };
+    setActivity("Approval needed");
     return;
   }
 
@@ -224,7 +244,11 @@ function handleAgentResponse(response) {
 
   if (response.status === "needs_user") {
     state.pending = null;
+    setActivity("Manual input needed");
+    return;
   }
+
+  setActivity("Ready");
 }
 
 function addFailedObservationMessages(observations) {
@@ -250,6 +274,9 @@ function render() {
   elements.chatView.hidden = !hasKey;
   elements.keyStatus.textContent = hasKey ? "Key saved" : "Key missing";
   elements.modelStatus.textContent = state.settings.model;
+  elements.activityStatus.textContent = state.activity;
+  elements.activityStatus.classList.toggle("active", state.busy || Boolean(state.pending));
+  renderRunMeta();
   elements.modelInput.value = state.settings.model;
   elements.maxStepsInput.value = state.settings.maxSteps;
   elements.tabMeta.textContent = formatTab(state.activeTab);
@@ -260,6 +287,7 @@ function render() {
   const disableComposer = state.busy || Boolean(state.pending);
   elements.promptInput.disabled = disableComposer;
   elements.sendButton.disabled = disableComposer;
+  elements.sendButton.textContent = state.busy ? "Wait" : "Send";
 
   if (hasKey && !disableComposer) {
     setTimeout(() => elements.promptInput.focus(), 0);
@@ -322,6 +350,45 @@ function setBusy(isBusy) {
   state.busy = isBusy;
 }
 
+function setActivity(activity) {
+  state.activity = activity;
+}
+
+function updateRunMeta(response) {
+  if (!response || typeof response !== "object") {
+    return;
+  }
+
+  state.runMeta = {
+    stepCount: Number.isInteger(response.stepCount) ? response.stepCount : state.runMeta.stepCount,
+    maxSteps: Number.isInteger(response.maxSteps) ? response.maxSteps : state.runMeta.maxSteps,
+    usage: response.usage || state.runMeta.usage
+  };
+}
+
+function resetRunMeta() {
+  state.runMeta = {
+    stepCount: null,
+    maxSteps: null,
+    usage: null
+  };
+}
+
+function renderRunMeta() {
+  const hasStepCount = Number.isInteger(state.runMeta.stepCount)
+    && Number.isInteger(state.runMeta.maxSteps);
+  elements.stepStatus.hidden = !hasStepCount;
+  if (hasStepCount) {
+    elements.stepStatus.textContent = `Step ${state.runMeta.stepCount}/${state.runMeta.maxSteps}`;
+  }
+
+  const usage = formatUsage(state.runMeta.usage);
+  elements.usageStatus.hidden = !usage;
+  if (usage) {
+    elements.usageStatus.textContent = usage;
+  }
+}
+
 function roleLabel(role) {
   if (role === "user") {
     return "You";
@@ -351,6 +418,33 @@ function publicSettings(response) {
     model: response.model || "grok-4.3",
     maxSteps: Number(response.maxSteps) || 6
   };
+}
+
+function formatUsage(usage) {
+  if (!usage || typeof usage !== "object") {
+    return "";
+  }
+
+  const total = firstFiniteNumber(
+    usage.totalTokens,
+    usage.total_tokens,
+    usage.tokens
+  );
+  if (total != null) {
+    return `${total.toLocaleString()} tokens`;
+  }
+
+  const input = firstFiniteNumber(usage.inputTokens, usage.promptTokens, usage.prompt_tokens);
+  const output = firstFiniteNumber(usage.outputTokens, usage.completionTokens, usage.completion_tokens);
+  if (input == null && output == null) {
+    return "";
+  }
+
+  return `${input || 0} in / ${output || 0} out`;
+}
+
+function firstFiniteNumber(...values) {
+  return values.find((value) => typeof value === "number" && Number.isFinite(value)) ?? null;
 }
 
 function sendRuntime(message) {

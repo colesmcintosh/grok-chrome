@@ -296,6 +296,12 @@ input {
   color: #6f5a26;
 }
 
+.status-pill.active {
+  border-color: var(--black);
+  background: var(--black);
+  color: #ffffff;
+}
+
 .messages {
   min-height: 0;
   overflow-y: auto;

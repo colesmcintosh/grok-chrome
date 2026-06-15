@@ -33,6 +33,22 @@
             <span>Max steps</span>
             <input id="maxStepsInput" name="maxSteps" type="number" min="1" max="12" step="1">
           </label>
+          <label class="checkbox-label">
+            <input id="redactionInput" name="redactSensitiveText" type="checkbox">
+            <span>Redact sensitive snapshot text</span>
+          </label>
+          <label>
+            <span>Allowed sites</span>
+            <textarea id="allowedHostsInput" name="allowedHosts" rows="2" placeholder="example.com"></textarea>
+          </label>
+          <label>
+            <span>Blocked sites</span>
+            <textarea id="blockedHostsInput" name="blockedHosts" rows="2" placeholder="accounts.example.com"></textarea>
+          </label>
+          <div class="settings-preview">
+            <button class="secondary-button" id="snapshotPreviewButton" type="button">Preview snapshot</button>
+            <pre id="snapshotPreview" hidden></pre>
+          </div>
           <div class="settings-actions">
             <button class="secondary-button" id="clearKeyButton" type="button">Clear key</button>
             <button class="primary-button" type="submit">Save</button>

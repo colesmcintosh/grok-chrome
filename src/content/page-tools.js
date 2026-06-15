@@ -30,7 +30,7 @@
     if (message.type === "grok:snapshot") {
       return {
         ok: true,
-        snapshot: snapshotPage()
+        snapshot: snapshotPage(message.privacy || {})
       };
     }
 
@@ -41,35 +41,35 @@
     return { ok: false, error: "Unknown page tool." };
   }
 
-  function snapshotPage() {
+  function snapshotPage(privacy) {
     registry.clear();
 
-    const text = cleanText(document.body?.innerText || "");
+    const text = prepareText(document.body?.innerText || "", privacy);
     const warnings = detectWarnings(text);
 
     return {
       title: document.title || "Untitled",
-      url: location.href,
+      url: redactUrl(location.href, privacy),
       status: "available",
       warnings,
-      headings: getHeadings(),
-      elements: getInteractiveElements(),
+      headings: getHeadings(privacy),
+      elements: getInteractiveElements(privacy),
       text: truncate(text, MAX_TEXT_LENGTH)
     };
   }
 
-  function getHeadings() {
+  function getHeadings(privacy) {
     return Array.from(document.querySelectorAll("h1, h2, h3"))
       .filter(isVisible)
       .slice(0, 24)
       .map((heading) => ({
         level: heading.tagName.toLowerCase(),
-        text: truncate(cleanText(heading.innerText || heading.textContent || ""), 180)
+        text: truncate(prepareText(heading.innerText || heading.textContent || "", privacy), 180)
       }))
       .filter((heading) => heading.text);
   }
 
-  function getInteractiveElements() {
+  function getInteractiveElements(privacy) {
     const selector = [
       "a[href]",
       "button",
@@ -98,13 +98,13 @@
 
       const ref = `el-${elements.length + 1}`;
       registry.set(ref, element);
-      elements.push(describeElement(element, ref));
+      elements.push(describeElement(element, ref, privacy));
     }
 
     return elements;
   }
 
-  function describeElement(element, ref) {
+  function describeElement(element, ref, privacy) {
     const tag = element.tagName.toLowerCase();
     const type = element.getAttribute("type");
     const role = element.getAttribute("role");
@@ -114,10 +114,10 @@
     const description = {
       ref,
       kind,
-      name: readableName(element),
-      placeholder: truncate(element.getAttribute("placeholder") || "", 120),
-      title: truncate(element.getAttribute("title") || "", 120),
-      href: tag === "a" ? truncate(element.href || "", 220) : "",
+      name: readableName(element, privacy),
+      placeholder: truncate(prepareText(element.getAttribute("placeholder") || "", privacy), 120),
+      title: truncate(prepareText(element.getAttribute("title") || "", privacy), 120),
+      href: tag === "a" ? truncate(redactUrl(element.href || "", privacy), 220) : "",
       bounds: {
         x: Math.round(rect.x),
         y: Math.round(rect.y),
@@ -129,7 +129,7 @@
     if (tag === "select") {
       description.options = Array.from(element.options)
         .slice(0, 30)
-        .map((option) => option.value || cleanText(option.textContent || ""))
+        .map((option) => prepareText(option.value || option.textContent || "", privacy))
         .filter(Boolean);
     }
 
@@ -268,7 +268,7 @@
     return element;
   }
 
-  function readableName(element) {
+  function readableName(element, privacy) {
     const labelledBy = element.getAttribute("aria-labelledby");
     const labelledByText = labelledBy
       ? labelledBy
@@ -295,7 +295,7 @@
       element.textContent
     ];
 
-    return truncate(cleanText(candidates.find((candidate) => cleanText(candidate || "")) || ""), 180);
+    return truncate(prepareText(candidates.find((candidate) => cleanText(candidate || "")) || "", privacy), 180);
   }
 
   function detectWarnings(text) {
@@ -393,6 +393,41 @@
 
   function cleanText(value) {
     return String(value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function prepareText(value, privacy) {
+    const text = cleanText(value);
+    if (privacy?.redactSensitiveText === false) {
+      return text;
+    }
+    return redactSensitiveText(text);
+  }
+
+  function redactSensitiveText(value) {
+    return String(value || "")
+      .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[email]")
+      .replace(/\b(?:xai|sk|sk-proj|ghp|gho|github_pat|AKIA)[A-Za-z0-9_\-]{12,}\b/g, "[token]")
+      .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b/gi, "Bearer [token]")
+      .replace(/\b\d{3}-\d{2}-\d{4}\b/g, "[id-number]")
+      .replace(/\b(?:\d[ -]*?){13,19}\b/g, "[number]");
+  }
+
+  function redactUrl(value, privacy) {
+    if (privacy?.redactSensitiveText === false) {
+      return String(value || "");
+    }
+
+    try {
+      const url = new URL(value);
+      for (const key of Array.from(url.searchParams.keys())) {
+        if (/token|key|secret|session|auth|code|password|pass|email/i.test(key)) {
+          url.searchParams.set(key, "[redacted]");
+        }
+      }
+      return redactSensitiveText(url.href);
+    } catch {
+      return redactSensitiveText(value);
+    }
   }
 
   function truncate(value, maxLength) {

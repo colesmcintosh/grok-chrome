@@ -2,7 +2,12 @@ const state = {
   settings: {
     hasApiKey: false,
     model: "grok-4.3",
-    maxSteps: 6
+    maxSteps: 6,
+    privacy: {
+      redactSensitiveText: true,
+      allowedHosts: [],
+      blockedHosts: []
+    }
   },
   activeTab: null,
   messages: [],
@@ -17,6 +22,11 @@ const elements = {
   apiKeyInput: document.querySelector("#apiKeyInput"),
   modelInput: document.querySelector("#modelInput"),
   maxStepsInput: document.querySelector("#maxStepsInput"),
+  redactionInput: document.querySelector("#redactionInput"),
+  allowedHostsInput: document.querySelector("#allowedHostsInput"),
+  blockedHostsInput: document.querySelector("#blockedHostsInput"),
+  snapshotPreviewButton: document.querySelector("#snapshotPreviewButton"),
+  snapshotPreview: document.querySelector("#snapshotPreview"),
   clearKeyButton: document.querySelector("#clearKeyButton"),
   setupView: document.querySelector("#setupView"),
   setupForm: document.querySelector("#setupForm"),
@@ -65,11 +75,16 @@ function wireEvents() {
     await saveSettings({
       apiKey: elements.apiKeyInput.value.trim(),
       model: elements.modelInput.value.trim(),
-      maxSteps: Number(elements.maxStepsInput.value)
+      maxSteps: Number(elements.maxStepsInput.value),
+      redactSensitiveText: elements.redactionInput.checked,
+      allowedHosts: elements.allowedHostsInput.value,
+      blockedHosts: elements.blockedHostsInput.value
     });
     elements.apiKeyInput.value = "";
     elements.settingsPanel.hidden = true;
   });
+
+  elements.snapshotPreviewButton.addEventListener("click", previewSnapshot);
 
   elements.clearKeyButton.addEventListener("click", async () => {
     setBusy(true);
@@ -129,6 +144,31 @@ async function saveSettings(values) {
   } finally {
     setBusy(false);
     render();
+  }
+}
+
+async function previewSnapshot() {
+  setBusy(true);
+  document.body.classList.add("is-busy");
+
+  try {
+    await refreshActiveTab();
+    if (!state.activeTab?.id) {
+      throw new Error("No active tab is available.");
+    }
+
+    const response = await sendRuntime({
+      type: "privacy:previewSnapshot",
+      tabId: state.activeTab.id,
+      privacy: formPrivacySettings()
+    });
+    renderSnapshotPreview(response.snapshot);
+  } catch (error) {
+    elements.snapshotPreview.hidden = false;
+    elements.snapshotPreview.textContent = error.message || String(error);
+  } finally {
+    setBusy(false);
+    document.body.classList.remove("is-busy");
   }
 }
 
@@ -252,6 +292,9 @@ function render() {
   elements.modelStatus.textContent = state.settings.model;
   elements.modelInput.value = state.settings.model;
   elements.maxStepsInput.value = state.settings.maxSteps;
+  elements.redactionInput.checked = state.settings.privacy.redactSensitiveText;
+  elements.allowedHostsInput.value = state.settings.privacy.allowedHosts.join("\n");
+  elements.blockedHostsInput.value = state.settings.privacy.blockedHosts.join("\n");
   elements.tabMeta.textContent = formatTab(state.activeTab);
   document.body.classList.toggle("is-busy", state.busy);
 
@@ -349,8 +392,42 @@ function publicSettings(response) {
   return {
     hasApiKey: Boolean(response.hasApiKey),
     model: response.model || "grok-4.3",
-    maxSteps: Number(response.maxSteps) || 6
+    maxSteps: Number(response.maxSteps) || 6,
+    privacy: {
+      redactSensitiveText: response.privacy?.redactSensitiveText !== false,
+      allowedHosts: Array.isArray(response.privacy?.allowedHosts)
+        ? response.privacy.allowedHosts
+        : [],
+      blockedHosts: Array.isArray(response.privacy?.blockedHosts)
+        ? response.privacy.blockedHosts
+        : []
+    }
   };
+}
+
+function formPrivacySettings() {
+  return {
+    redactSensitiveText: elements.redactionInput.checked,
+    allowedHosts: elements.allowedHostsInput.value,
+    blockedHosts: elements.blockedHostsInput.value
+  };
+}
+
+function renderSnapshotPreview(snapshot) {
+  if (!snapshot) {
+    elements.snapshotPreview.hidden = true;
+    elements.snapshotPreview.textContent = "";
+    return;
+  }
+
+  elements.snapshotPreview.hidden = false;
+  elements.snapshotPreview.textContent = [
+    snapshot.title || "Untitled",
+    snapshot.url || "unknown URL",
+    `${snapshot.headingCount || 0} headings, ${snapshot.elementCount || 0} interactive elements`,
+    "",
+    String(snapshot.text || "(no visible text captured)").slice(0, 1200)
+  ].join("\n");
 }
 
 function sendRuntime(message) {

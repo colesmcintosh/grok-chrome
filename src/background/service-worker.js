@@ -2,6 +2,10 @@ import { createXai } from "@ai-sdk/xai";
 import { generateText, Output } from "ai";
 
 import {
+  normalizeMaxSteps,
+  normalizeNavigationUrl
+} from "../shared/browser-policy.js";
+import {
   DEFAULT_MAX_STEPS,
   DEFAULT_MODEL,
   buildGrokMessages,
@@ -119,7 +123,7 @@ async function getPublicSettings() {
   return {
     hasApiKey: Boolean(values[STORAGE_KEYS.apiKey]),
     model: values[STORAGE_KEYS.model] || DEFAULT_MODEL,
-    maxSteps: Number(values[STORAGE_KEYS.maxSteps]) || DEFAULT_MAX_STEPS
+    maxSteps: normalizeMaxSteps(values[STORAGE_KEYS.maxSteps], DEFAULT_MAX_STEPS)
   };
 }
 
@@ -137,7 +141,7 @@ async function getPrivateSettings() {
   return {
     apiKey,
     model: values[STORAGE_KEYS.model] || DEFAULT_MODEL,
-    maxSteps: Number(values[STORAGE_KEYS.maxSteps]) || DEFAULT_MAX_STEPS
+    maxSteps: normalizeMaxSteps(values[STORAGE_KEYS.maxSteps], DEFAULT_MAX_STEPS)
   };
 }
 
@@ -157,8 +161,7 @@ async function saveSettings(message) {
   }
 
   if (message.maxSteps != null) {
-    const maxSteps = Math.max(1, Math.min(12, Number(message.maxSteps) || DEFAULT_MAX_STEPS));
-    updates[STORAGE_KEYS.maxSteps] = maxSteps;
+    updates[STORAGE_KEYS.maxSteps] = normalizeMaxSteps(message.maxSteps, DEFAULT_MAX_STEPS);
   }
 
   if (Object.keys(updates).length) {
@@ -594,23 +597,6 @@ async function getActiveTab() {
     throw new Error("No active tab is available.");
   }
   return tab;
-}
-
-function normalizeNavigationUrl(value) {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error("Navigation needs a URL.");
-  }
-
-  const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(value.trim())
-    ? value.trim()
-    : `https://${value.trim()}`;
-  const url = new URL(withScheme);
-
-  if (!["http:", "https:"].includes(url.protocol)) {
-    throw new Error("Only HTTP and HTTPS navigation is allowed.");
-  }
-
-  return url.href;
 }
 
 function waitForTabLoad(tabId) {

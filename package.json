@@ -23,7 +23,7 @@
   "scripts": {
     "build": "bun scripts/build.mjs",
     "test": "bun test",
-    "check": "bun run build && bun test && node --check dist/background/service-worker.js && node --check src/content/page-tools.js && node --check src/sidepanel/panel.js && node --check src/shared/agent-protocol.js"
+    "check": "bun run build && bun test && node --check dist/background/service-worker.js && node --check src/content/page-tools.js && node --check src/sidepanel/panel.js && node --check src/shared/agent-protocol.js && node --check src/shared/browser-policy.js"
   },
   "dependencies": {
     "@ai-sdk/xai": "^2.0.0",

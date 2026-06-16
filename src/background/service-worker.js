@@ -17,7 +17,10 @@ import {
 const STORAGE_KEYS = {
   apiKey: "xaiApiKey",
   model: "xaiModel",
-  maxSteps: "agentMaxSteps"
+  maxSteps: "agentMaxSteps",
+  redactSensitiveText: "privacyRedactSensitiveText",
+  allowedHosts: "privacyAllowedHosts",
+  blockedHosts: "privacyBlockedHosts"
 };
 const RUN_SESSION_PREFIX = "grokPendingRun:";
 const RUN_INDEX_SESSION_KEY = "grokPendingRunIndex";
@@ -103,6 +106,8 @@ async function handleMessage(message) {
       return getPublicSettings();
     case "tabs:getActive":
       return { tab: await getActiveTab() };
+    case "privacy:previewSnapshot":
+      return previewSnapshot(message);
     case "panel:getState":
       return getPanelState(message);
     case "panel:saveState":
@@ -123,25 +128,18 @@ async function handleMessage(message) {
 }
 
 async function getPublicSettings() {
-  const values = await storageGet([
-    STORAGE_KEYS.apiKey,
-    STORAGE_KEYS.model,
-    STORAGE_KEYS.maxSteps
-  ]);
+  const values = await getSettingsValues();
 
   return {
     hasApiKey: Boolean(values[STORAGE_KEYS.apiKey]),
     model: values[STORAGE_KEYS.model] || DEFAULT_MODEL,
-    maxSteps: normalizeMaxSteps(values[STORAGE_KEYS.maxSteps], DEFAULT_MAX_STEPS)
+    maxSteps: normalizeMaxSteps(values[STORAGE_KEYS.maxSteps], DEFAULT_MAX_STEPS),
+    privacy: readPrivacySettings(values)
   };
 }
 
 async function getPrivateSettings() {
-  const values = await storageGet([
-    STORAGE_KEYS.apiKey,
-    STORAGE_KEYS.model,
-    STORAGE_KEYS.maxSteps
-  ]);
+  const values = await getSettingsValues();
   const apiKey = values[STORAGE_KEYS.apiKey];
   if (!apiKey) {
     throw new Error("Add an xAI API key before starting a chat.");
@@ -150,8 +148,13 @@ async function getPrivateSettings() {
   return {
     apiKey,
     model: values[STORAGE_KEYS.model] || DEFAULT_MODEL,
-    maxSteps: normalizeMaxSteps(values[STORAGE_KEYS.maxSteps], DEFAULT_MAX_STEPS)
+    maxSteps: normalizeMaxSteps(values[STORAGE_KEYS.maxSteps], DEFAULT_MAX_STEPS),
+    privacy: readPrivacySettings(values)
   };
+}
+
+function getSettingsValues() {
+  return storageGet(Object.values(STORAGE_KEYS));
 }
 
 async function saveSettings(message) {
@@ -173,6 +176,18 @@ async function saveSettings(message) {
     updates[STORAGE_KEYS.maxSteps] = normalizeMaxSteps(message.maxSteps, DEFAULT_MAX_STEPS);
   }
 
+  if (message.redactSensitiveText != null) {
+    updates[STORAGE_KEYS.redactSensitiveText] = Boolean(message.redactSensitiveText);
+  }
+
+  if (typeof message.allowedHosts === "string" || Array.isArray(message.allowedHosts)) {
+    updates[STORAGE_KEYS.allowedHosts] = normalizeHostList(message.allowedHosts);
+  }
+
+  if (typeof message.blockedHosts === "string" || Array.isArray(message.blockedHosts)) {
+    updates[STORAGE_KEYS.blockedHosts] = normalizeHostList(message.blockedHosts);
+  }
+
   if (Object.keys(updates).length) {
     await storageSet(updates);
   }
@@ -180,9 +195,30 @@ async function saveSettings(message) {
   return getPublicSettings();
 }
 
+async function previewSnapshot(message) {
+  const values = await getSettingsValues();
+  const privacy = privacySettingsFromMessage(message.privacy) || readPrivacySettings(values);
+  const tab = await resolveTab(message.tabId);
+  enforceTabPrivacy(tab, privacy);
+  const snapshot = await getSnapshot(tab.id, privacy);
+
+  return {
+    snapshot: {
+      title: snapshot.title,
+      url: snapshot.url,
+      status: snapshot.status,
+      warnings: snapshot.warnings || [],
+      headingCount: snapshot.headings?.length || 0,
+      elementCount: snapshot.elements?.length || 0,
+      text: snapshot.text || ""
+    }
+  };
+}
+
 async function startRun(message) {
   const settings = await getPrivateSettings();
   const tab = await resolveTab(message.tabId);
+  enforceTabPrivacy(tab, settings.privacy);
   const run = {
     id: crypto.randomUUID(),
     tabId: tab.id,
@@ -235,7 +271,7 @@ async function approveRun(message) {
 
   for (let index = 0; index < maxActions; index += 1) {
     const action = actions[index];
-    const observation = await executeAction(run.tabId, action, run.lastSnapshot);
+    const observation = await executeAction(run.tabId, action, run.lastSnapshot, run.settings.privacy);
     run.observations.push(observation);
 
     if (action.tool === "ask_user") {
@@ -289,7 +325,7 @@ async function continueRun(run) {
   }
 
   run.stepCount += 1;
-  const snapshot = await getSnapshot(run.tabId);
+  const snapshot = await getSnapshot(run.tabId, run.settings.privacy);
   run.lastSnapshot = snapshot;
   const messages = buildGrokMessages(run.history, snapshot, run.observations);
   const completion = await callGrok(run.settings, messages);
@@ -362,7 +398,8 @@ async function getRun(runId) {
     settings: {
       ...settings,
       model: run.settings?.model || settings.model,
-      maxSteps: run.settings?.maxSteps || settings.maxSteps
+      maxSteps: run.settings?.maxSteps || settings.maxSteps,
+      privacy: run.settings?.privacy || settings.privacy
     }
   };
   runs.set(runId, restored);
@@ -389,7 +426,8 @@ async function persistRun(run) {
       lastSnapshot: run.lastSnapshot,
       settings: {
         model: run.settings.model,
-        maxSteps: run.settings.maxSteps
+        maxSteps: run.settings.maxSteps,
+        privacy: run.settings.privacy
       }
     }
   });
@@ -526,10 +564,11 @@ function formatAiSdkError(error, structuredError) {
   return `${primary}. Structured action planning also failed: ${structured}`;
 }
 
-async function executeAction(tabId, action, beforeSnapshot = null) {
+async function executeAction(tabId, action, beforeSnapshot = null, privacy = defaultPrivacySettings()) {
   try {
     if (action.tool === "navigate") {
       const url = normalizeNavigationUrl(action.args?.url);
+      enforceUrlPrivacy(url, privacy);
       await tabsUpdate(tabId, { url });
       await waitForTabLoad(tabId);
       return { ok: true, tool: "navigate", summary: `Opened ${url}`, pageChanged: true };
@@ -557,7 +596,7 @@ async function executeAction(tabId, action, beforeSnapshot = null) {
       type: "grok:perform",
       action
     });
-    const settled = await waitForPageSettled(tabId, beforeSnapshot, loadPromise, action);
+    const settled = await waitForPageSettled(tabId, beforeSnapshot, loadPromise, action, privacy);
     const summary = [result?.summary || result?.error || "Action completed.", settled.summary]
       .filter(Boolean)
       .join(" ");
@@ -690,7 +729,7 @@ function actionMayChangePage(action) {
   return action.tool === "type" && Boolean(action.args?.submit);
 }
 
-async function waitForPageSettled(tabId, beforeSnapshot, loadPromise, action) {
+async function waitForPageSettled(tabId, beforeSnapshot, loadPromise, action, privacy) {
   if (!actionMayChangePage(action)) {
     return { changed: false, summary: "" };
   }
@@ -705,7 +744,7 @@ async function waitForPageSettled(tabId, beforeSnapshot, loadPromise, action) {
       delay(225).then(() => false)
     ]);
 
-    const latest = await getSnapshot(tabId).catch(() => null);
+    const latest = await getSnapshot(tabId, privacy).catch(() => null);
     if (!latest) {
       continue;
     }
@@ -751,15 +790,22 @@ function snapshotFingerprint(snapshot) {
   ].join("\n");
 }
 
-async function getSnapshot(tabId) {
+async function getSnapshot(tabId, privacy = defaultPrivacySettings()) {
+  const tab = await tabsGet(tabId).catch(() => null);
+  if (tab) {
+    enforceTabPrivacy(tab, privacy);
+  }
+
   try {
-    const snapshot = await sendPageTool(tabId, { type: "grok:snapshot" });
+    const snapshot = await sendPageTool(tabId, {
+      type: "grok:snapshot",
+      privacy: snapshotPrivacyOptions(privacy)
+    });
     if (!snapshot?.ok) {
       throw new Error(snapshot?.error || "The page did not provide a snapshot.");
     }
     return snapshot.snapshot;
   } catch (error) {
-    const tab = await tabsGet(tabId).catch(() => null);
     return {
       title: tab?.title || "Unavailable page",
       url: tab?.url || "",
@@ -770,6 +816,85 @@ async function getSnapshot(tabId) {
       text: "The extension could not inspect this page. It may be a browser-internal page, a restricted Chrome Web Store page, or a page that needs to be reloaded after installing the extension."
     };
   }
+}
+
+function defaultPrivacySettings() {
+  return {
+    redactSensitiveText: true,
+    allowedHosts: [],
+    blockedHosts: []
+  };
+}
+
+function readPrivacySettings(values) {
+  return {
+    redactSensitiveText: values[STORAGE_KEYS.redactSensitiveText] !== false,
+    allowedHosts: normalizeHostList(values[STORAGE_KEYS.allowedHosts]),
+    blockedHosts: normalizeHostList(values[STORAGE_KEYS.blockedHosts])
+  };
+}
+
+function privacySettingsFromMessage(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  return {
+    redactSensitiveText: value.redactSensitiveText !== false,
+    allowedHosts: normalizeHostList(value.allowedHosts),
+    blockedHosts: normalizeHostList(value.blockedHosts)
+  };
+}
+
+function snapshotPrivacyOptions(privacy) {
+  return {
+    redactSensitiveText: privacy?.redactSensitiveText !== false
+  };
+}
+
+function normalizeHostList(value) {
+  const rawItems = Array.isArray(value)
+    ? value
+    : String(value || "").split(/[\n,]/);
+
+  return Array.from(new Set(
+    rawItems
+      .map((item) => String(item || "").trim().toLowerCase())
+      .map((item) => item.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/^(\*\.)/, ""))
+      .map((item) => item.split("/")[0])
+      .filter(Boolean)
+  ));
+}
+
+function enforceTabPrivacy(tab, privacy) {
+  const host = tabHost(tab);
+  if (!host) {
+    return;
+  }
+
+  if (hostMatches(host, privacy.blockedHosts)) {
+    throw new Error(`This site is blocked by privacy settings: ${host}`);
+  }
+
+  if (privacy.allowedHosts.length > 0 && !hostMatches(host, privacy.allowedHosts)) {
+    throw new Error(`This site is not in the privacy allowlist: ${host}`);
+  }
+}
+
+function enforceUrlPrivacy(value, privacy) {
+  enforceTabPrivacy({ url: value }, privacy);
+}
+
+function tabHost(tab) {
+  try {
+    return new URL(tab?.url || "").hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+function hostMatches(host, patterns) {
+  return patterns.some((pattern) => host === pattern || host.endsWith(`.${pattern}`));
 }
 
 async function sendPageTool(tabId, payload) {

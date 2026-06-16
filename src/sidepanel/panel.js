@@ -42,6 +42,8 @@ async function init() {
   wireEvents();
   await refreshSettings();
   await refreshActiveTab();
+  await restorePanelState();
+  await restorePendingRun();
   render();
 }
 
@@ -104,7 +106,7 @@ function wireEvents() {
 
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
-      refreshActiveTab().then(render).catch(() => {});
+      refreshActiveContext().then(render).catch(() => {});
     }
   });
 }
@@ -117,6 +119,50 @@ async function refreshSettings() {
 async function refreshActiveTab() {
   const response = await sendRuntime({ type: "tabs:getActive" });
   state.activeTab = response.tab || null;
+}
+
+async function refreshActiveContext() {
+  await refreshActiveTab();
+  await restorePanelState();
+  await restorePendingRun();
+}
+
+async function restorePanelState() {
+  if (!state.activeTab?.id) {
+    state.messages = [];
+    return;
+  }
+
+  const response = await sendRuntime({
+    type: "panel:getState",
+    tabId: state.activeTab.id
+  });
+  state.messages = Array.isArray(response.messages) ? response.messages : [];
+}
+
+async function restorePendingRun() {
+  if (!state.activeTab?.id) {
+    state.pending = null;
+    return;
+  }
+
+  const response = await sendRuntime({
+    type: "agent:getPending",
+    tabId: state.activeTab.id
+  });
+  state.pending = response.pending || null;
+}
+
+async function persistPanelState() {
+  if (!state.activeTab?.id) {
+    return;
+  }
+
+  await sendRuntime({
+    type: "panel:saveState",
+    tabId: state.activeTab.id,
+    messages: state.messages
+  });
 }
 
 async function saveSettings(values) {
@@ -242,6 +288,7 @@ function pushMessage(role, content) {
     role,
     content: String(content || "").trim()
   });
+  persistPanelState().catch(() => {});
 }
 
 function render() {

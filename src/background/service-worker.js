@@ -20,6 +20,8 @@ const STORAGE_KEYS = {
   maxSteps: "agentMaxSteps"
 };
 const RUN_SESSION_PREFIX = "grokPendingRun:";
+const RUN_INDEX_SESSION_KEY = "grokPendingRunIndex";
+const PANEL_STATE_PREFIX = "grokPanelState:";
 const AGENT_RESPONSE_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -101,6 +103,13 @@ async function handleMessage(message) {
       return getPublicSettings();
     case "tabs:getActive":
       return { tab: await getActiveTab() };
+    case "panel:getState":
+      return getPanelState(message);
+    case "panel:saveState":
+      await savePanelState(message);
+      return {};
+    case "agent:getPending":
+      return getPendingRun(message);
     case "agent:start":
       return startRun(message);
     case "agent:approve":
@@ -186,6 +195,31 @@ async function startRun(message) {
 
   runs.set(run.id, run);
   return continueRun(run);
+}
+
+async function getPendingRun(message) {
+  const tab = await resolveTab(message.tabId);
+  const index = await getRunIndex();
+  const runId = index[String(tab.id)];
+  if (!runId) {
+    return { pending: null };
+  }
+
+  const run = await getRun(runId).catch(() => null);
+  if (!run?.pendingActions?.length) {
+    await removeRunIndex(runId);
+    return { pending: null };
+  }
+
+  return {
+    pending: {
+      runId: run.id,
+      actions: run.pendingActions.map((action) => ({
+        ...action,
+        summary: summarizeActionWithSnapshot(action, run.lastSnapshot)
+      }))
+    }
+  };
 }
 
 async function approveRun(message) {
@@ -307,7 +341,11 @@ async function persistRun(run) {
     return;
   }
 
+  const index = await getRunIndex();
+  index[String(run.tabId)] = run.id;
+
   await sessionSet({
+    [RUN_INDEX_SESSION_KEY]: index,
     [runSessionKey(run.id)]: {
       id: run.id,
       tabId: run.tabId,
@@ -331,10 +369,74 @@ async function deleteRun(runId) {
 
   runs.delete(runId);
   await sessionRemove(runSessionKey(runId));
+  await removeRunIndex(runId);
 }
 
 function runSessionKey(runId) {
   return `${RUN_SESSION_PREFIX}${runId}`;
+}
+
+async function getRunIndex() {
+  const stored = await sessionGet(RUN_INDEX_SESSION_KEY);
+  const index = stored[RUN_INDEX_SESSION_KEY];
+  return index && typeof index === "object" && !Array.isArray(index) ? index : {};
+}
+
+async function removeRunIndex(runId) {
+  const index = await getRunIndex();
+  let changed = false;
+
+  for (const [tabId, indexedRunId] of Object.entries(index)) {
+    if (indexedRunId === runId) {
+      delete index[tabId];
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    await sessionSet({ [RUN_INDEX_SESSION_KEY]: index });
+  }
+}
+
+async function getPanelState(message) {
+  const tab = await resolveTab(message.tabId);
+  const key = panelStateKey(tab.id);
+  const stored = await sessionGet(key);
+  return {
+    messages: sanitizePanelMessages(stored[key]?.messages)
+  };
+}
+
+async function savePanelState(message) {
+  const tabId = Number(message.tabId);
+  if (!Number.isInteger(tabId)) {
+    return;
+  }
+
+  await sessionSet({
+    [panelStateKey(tabId)]: {
+      messages: sanitizePanelMessages(message.messages)
+    }
+  });
+}
+
+function panelStateKey(tabId) {
+  return `${PANEL_STATE_PREFIX}${tabId}`;
+}
+
+function sanitizePanelMessages(messages) {
+  if (!Array.isArray(messages)) {
+    return [];
+  }
+
+  return messages
+    .filter((message) => message && ["user", "assistant", "system"].includes(message.role))
+    .map((message) => ({
+      role: message.role,
+      content: String(message.content || "").trim().slice(0, 12000)
+    }))
+    .filter((message) => message.content)
+    .slice(-64);
 }
 
 async function callGrok(settings, messages) {

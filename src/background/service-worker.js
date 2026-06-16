@@ -246,7 +246,9 @@ async function approveRun(message) {
         assistant: {
           content: action.args?.question || "Manual input is needed before I can continue."
         },
-        observations: [observation]
+        observations: [observation],
+        stepCount: run.stepCount,
+        maxSteps: run.settings.maxSteps
       };
     }
 
@@ -280,7 +282,9 @@ async function continueRun(run) {
       assistant: {
         content: "I stopped after reaching the configured action limit."
       },
-      observations: run.observations
+      observations: run.observations,
+      stepCount: run.stepCount,
+      maxSteps: run.settings.maxSteps
     };
   }
 
@@ -311,7 +315,9 @@ async function continueRun(run) {
       content: parsed.message || completion.content
     },
     observations: run.observations,
-    usage: completion.usage
+    usage: completion.usage,
+    stepCount: run.stepCount,
+    maxSteps: run.settings.maxSteps
   };
 }
 
@@ -328,7 +334,9 @@ function buildApprovalResponse(run, message, snapshot, usage = null) {
       detail: describeActionForApproval(action, snapshot)
     })),
     observations: run.observations,
-    usage
+    usage,
+    stepCount: run.stepCount,
+    maxSteps: run.settings.maxSteps
   };
 }
 

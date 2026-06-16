@@ -12,7 +12,13 @@ const state = {
   activeTab: null,
   messages: [],
   pending: null,
-  busy: false
+  busy: false,
+  activity: "Ready",
+  runMeta: {
+    stepCount: null,
+    maxSteps: null,
+    usage: null
+  }
 };
 
 const elements = {
@@ -35,6 +41,9 @@ const elements = {
   tabMeta: document.querySelector("#tabMeta"),
   keyStatus: document.querySelector("#keyStatus"),
   modelStatus: document.querySelector("#modelStatus"),
+  activityStatus: document.querySelector("#activityStatus"),
+  stepStatus: document.querySelector("#stepStatus"),
+  usageStatus: document.querySelector("#usageStatus"),
   messages: document.querySelector("#messages"),
   composer: document.querySelector("#composer"),
   promptInput: document.querySelector("#promptInput"),
@@ -52,6 +61,8 @@ async function init() {
   wireEvents();
   await refreshSettings();
   await refreshActiveTab();
+  await restorePanelState();
+  await restorePendingRun();
   render();
 }
 
@@ -119,7 +130,7 @@ function wireEvents() {
 
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
-      refreshActiveTab().then(render).catch(() => {});
+      refreshActiveContext().then(render).catch(() => {});
     }
   });
 }
@@ -132,6 +143,50 @@ async function refreshSettings() {
 async function refreshActiveTab() {
   const response = await sendRuntime({ type: "tabs:getActive" });
   state.activeTab = response.tab || null;
+}
+
+async function refreshActiveContext() {
+  await refreshActiveTab();
+  await restorePanelState();
+  await restorePendingRun();
+}
+
+async function restorePanelState() {
+  if (!state.activeTab?.id) {
+    state.messages = [];
+    return;
+  }
+
+  const response = await sendRuntime({
+    type: "panel:getState",
+    tabId: state.activeTab.id
+  });
+  state.messages = Array.isArray(response.messages) ? response.messages : [];
+}
+
+async function restorePendingRun() {
+  if (!state.activeTab?.id) {
+    state.pending = null;
+    return;
+  }
+
+  const response = await sendRuntime({
+    type: "agent:getPending",
+    tabId: state.activeTab.id
+  });
+  state.pending = response.pending || null;
+}
+
+async function persistPanelState() {
+  if (!state.activeTab?.id) {
+    return;
+  }
+
+  await sendRuntime({
+    type: "panel:saveState",
+    tabId: state.activeTab.id,
+    messages: state.messages
+  });
 }
 
 async function saveSettings(values) {
@@ -194,10 +249,14 @@ async function sendPrompt() {
   elements.promptInput.value = "";
   elements.promptInput.style.height = "auto";
   pushMessage("user", prompt);
+  resetRunMeta();
   setBusy(true);
+  setActivity("Reading page");
   render();
 
   try {
+    setActivity("Planning");
+    render();
     const response = await sendRuntime({
       type: "agent:start",
       tabId: state.activeTab.id,
@@ -205,6 +264,7 @@ async function sendPrompt() {
     });
     handleAgentResponse(response);
   } catch (error) {
+    setActivity("Error");
     pushMessage("system", error.message || String(error));
   } finally {
     setBusy(false);
@@ -212,24 +272,27 @@ async function sendPrompt() {
   }
 }
 
-async function approvePending() {
+async function approvePending(mode = "all") {
   if (!state.pending || state.busy) {
     return;
   }
 
   setBusy(true);
+  setActivity("Running actions");
   render();
 
   try {
     const response = await sendRuntime({
       type: "agent:approve",
-      runId: state.pending.runId
+      runId: state.pending.runId,
+      mode
     });
     state.pending = null;
     addFailedObservationMessages(response.observations);
     handleAgentResponse(response);
   } catch (error) {
     state.pending = null;
+    setActivity("Error");
     pushMessage("system", error.message || String(error));
   } finally {
     setBusy(false);
@@ -244,17 +307,21 @@ async function cancelPending() {
 
   const runId = state.pending.runId;
   state.pending = null;
+  setActivity("Ready");
   pushMessage("system", "Action batch cancelled.");
   render();
   await sendRuntime({ type: "agent:cancel", runId }).catch(() => {});
 }
 
 function handleAgentResponse(response) {
+  updateRunMeta(response);
+
   if (response.status === "needs_approval") {
     state.pending = {
       runId: response.runId,
       actions: response.actions || []
     };
+    setActivity("Approval needed");
     return;
   }
 
@@ -264,7 +331,11 @@ function handleAgentResponse(response) {
 
   if (response.status === "needs_user") {
     state.pending = null;
+    setActivity("Manual input needed");
+    return;
   }
+
+  setActivity("Ready");
 }
 
 function addFailedObservationMessages(observations) {
@@ -282,6 +353,7 @@ function pushMessage(role, content) {
     role,
     content: String(content || "").trim()
   });
+  persistPanelState().catch(() => {});
 }
 
 function render() {
@@ -290,6 +362,9 @@ function render() {
   elements.chatView.hidden = !hasKey;
   elements.keyStatus.textContent = hasKey ? "Key saved" : "Key missing";
   elements.modelStatus.textContent = state.settings.model;
+  elements.activityStatus.textContent = state.activity;
+  elements.activityStatus.classList.toggle("active", state.busy || Boolean(state.pending));
+  renderRunMeta();
   elements.modelInput.value = state.settings.model;
   elements.maxStepsInput.value = state.settings.maxSteps;
   elements.redactionInput.checked = state.settings.privacy.redactSensitiveText;
@@ -303,6 +378,7 @@ function render() {
   const disableComposer = state.busy || Boolean(state.pending);
   elements.promptInput.disabled = disableComposer;
   elements.sendButton.disabled = disableComposer;
+  elements.sendButton.textContent = state.busy ? "Wait" : "Send";
 
   if (hasKey && !disableComposer) {
     setTimeout(() => elements.promptInput.focus(), 0);
@@ -337,8 +413,11 @@ function renderMessages() {
 
 function renderApproval(pending) {
   const node = elements.approvalTemplate.content.firstElementChild.cloneNode(true);
-  node.querySelector(".approval-count").textContent = `${pending.actions.length}`;
+  const count = pending.actions.length;
+  node.querySelector(".approval-count").textContent = `${count} pending`;
   const list = node.querySelector(".approval-actions");
+  const approveOneButton = node.querySelector(".approve-one-action");
+  const approveAllButton = node.querySelector(".approve-all-actions");
 
   pending.actions.forEach((action, index) => {
     const row = document.createElement("div");
@@ -348,21 +427,102 @@ function renderApproval(pending) {
     number.className = "action-index";
     number.textContent = String(index + 1);
 
+    const content = document.createElement("div");
+    content.className = "action-content";
+
+    const topLine = document.createElement("div");
+    topLine.className = "action-topline";
+
     const summary = document.createElement("div");
     summary.className = "action-summary";
     summary.textContent = action.summary || action.tool;
 
-    row.append(number, summary);
+    const risk = document.createElement("span");
+    risk.className = "action-risk";
+    risk.textContent = action.detail?.risk || action.tool;
+
+    topLine.append(summary, risk);
+    content.append(topLine, renderActionDetails(action));
+
+    row.append(number, content);
     list.append(row);
   });
 
-  node.querySelector(".approve-action").addEventListener("click", approvePending);
+  approveOneButton.textContent = count === 1 ? "Run action" : "Run next";
+  approveAllButton.hidden = count <= 1;
+  approveOneButton.addEventListener("click", () => approvePending("one"));
+  approveAllButton.addEventListener("click", () => approvePending("all"));
   node.querySelector(".cancel-action").addEventListener("click", cancelPending);
   return node;
 }
 
+function renderActionDetails(action) {
+  const details = document.createElement("details");
+  details.className = "action-details";
+
+  const summary = document.createElement("summary");
+  summary.textContent = "Details";
+  details.append(summary);
+
+  const list = document.createElement("dl");
+  const rows = Array.isArray(action.detail?.details) ? action.detail.details : [];
+  const safeRows = rows.length > 0
+    ? rows
+    : [{ label: "Tool", value: action.tool }];
+
+  for (const row of safeRows) {
+    const label = document.createElement("dt");
+    label.textContent = row.label || "Detail";
+    const value = document.createElement("dd");
+    value.textContent = String(row.value || "");
+    list.append(label, value);
+  }
+
+  details.append(list);
+  return details;
+}
+
 function setBusy(isBusy) {
   state.busy = isBusy;
+}
+
+function setActivity(activity) {
+  state.activity = activity;
+}
+
+function updateRunMeta(response) {
+  if (!response || typeof response !== "object") {
+    return;
+  }
+
+  state.runMeta = {
+    stepCount: Number.isInteger(response.stepCount) ? response.stepCount : state.runMeta.stepCount,
+    maxSteps: Number.isInteger(response.maxSteps) ? response.maxSteps : state.runMeta.maxSteps,
+    usage: response.usage || state.runMeta.usage
+  };
+}
+
+function resetRunMeta() {
+  state.runMeta = {
+    stepCount: null,
+    maxSteps: null,
+    usage: null
+  };
+}
+
+function renderRunMeta() {
+  const hasStepCount = Number.isInteger(state.runMeta.stepCount)
+    && Number.isInteger(state.runMeta.maxSteps);
+  elements.stepStatus.hidden = !hasStepCount;
+  if (hasStepCount) {
+    elements.stepStatus.textContent = `Step ${state.runMeta.stepCount}/${state.runMeta.maxSteps}`;
+  }
+
+  const usage = formatUsage(state.runMeta.usage);
+  elements.usageStatus.hidden = !usage;
+  if (usage) {
+    elements.usageStatus.textContent = usage;
+  }
 }
 
 function roleLabel(role) {
@@ -428,6 +588,33 @@ function renderSnapshotPreview(snapshot) {
     "",
     String(snapshot.text || "(no visible text captured)").slice(0, 1200)
   ].join("\n");
+}
+
+function formatUsage(usage) {
+  if (!usage || typeof usage !== "object") {
+    return "";
+  }
+
+  const total = firstFiniteNumber(
+    usage.totalTokens,
+    usage.total_tokens,
+    usage.tokens
+  );
+  if (total != null) {
+    return `${total.toLocaleString()} tokens`;
+  }
+
+  const input = firstFiniteNumber(usage.inputTokens, usage.promptTokens, usage.prompt_tokens);
+  const output = firstFiniteNumber(usage.outputTokens, usage.completionTokens, usage.completion_tokens);
+  if (input == null && output == null) {
+    return "";
+  }
+
+  return `${input || 0} in / ${output || 0} out`;
+}
+
+function firstFiniteNumber(...values) {
+  return values.find((value) => typeof value === "number" && Number.isFinite(value)) ?? null;
 }
 
 function sendRuntime(message) {

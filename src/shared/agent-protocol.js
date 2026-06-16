@@ -216,23 +216,122 @@ export function normalizeActions(actions) {
   }
 
   return actions
-    .map((action) => {
-      if (!action || typeof action !== "object") {
-        return null;
-      }
-
-      const tool = firstString(action.tool, action.name, "").trim().toLowerCase();
-      if (!ALLOWED_TOOLS.has(tool)) {
-        return null;
-      }
-
-      return {
-        tool,
-        args: sanitizeArgs(action.args)
-      };
-    })
+    .map(normalizeAction)
     .filter(Boolean)
     .slice(0, MAX_ACTIONS_PER_TURN);
+}
+
+function normalizeAction(action) {
+  if (!action || typeof action !== "object") {
+    return null;
+  }
+
+  const tool = firstString(action.tool, action.name, "").trim().toLowerCase();
+  if (!ALLOWED_TOOLS.has(tool)) {
+    return null;
+  }
+
+  const args = normalizeArgsForTool(tool, action.args);
+  if (!args) {
+    return null;
+  }
+
+  return { tool, args };
+}
+
+function normalizeArgsForTool(tool, args) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return null;
+  }
+
+  if (tool === "navigate") {
+    return normalizeNavigateArgs(args);
+  }
+  if (tool === "click") {
+    return normalizeClickArgs(args);
+  }
+  if (tool === "type") {
+    return normalizeTypeArgs(args);
+  }
+  if (tool === "select") {
+    return normalizeSelectArgs(args);
+  }
+  if (tool === "scroll") {
+    return normalizeScrollArgs(args);
+  }
+  if (tool === "wait") {
+    return normalizeWaitArgs(args);
+  }
+  if (tool === "ask_user") {
+    return normalizeAskUserArgs(args);
+  }
+  return null;
+}
+
+function normalizeNavigateArgs(args) {
+  const url = normalizeRequiredString(args.url, 2000);
+  return url ? { url } : null;
+}
+
+function normalizeClickArgs(args) {
+  const ref = normalizeRef(args.ref);
+  return ref ? { ref } : null;
+}
+
+function normalizeTypeArgs(args) {
+  const ref = normalizeRef(args.ref);
+  if (!ref || typeof args.text !== "string") {
+    return null;
+  }
+
+  const normalized = {
+    ref,
+    text: clampString(args.text, 4000)
+  };
+
+  if (typeof args.submit === "boolean") {
+    normalized.submit = args.submit;
+  }
+  if (typeof args.replace === "boolean") {
+    normalized.replace = args.replace;
+  }
+
+  return normalized;
+}
+
+function normalizeSelectArgs(args) {
+  const ref = normalizeRef(args.ref);
+  const value = normalizeRequiredString(args.value, 1000);
+  return ref && value ? { ref, value } : null;
+}
+
+function normalizeScrollArgs(args) {
+  if (!["up", "down"].includes(args.direction)) {
+    return null;
+  }
+
+  const normalized = {
+    direction: args.direction
+  };
+
+  const amount = normalizeFiniteNumber(args.amount);
+  if (amount != null) {
+    normalized.amount = Math.max(120, Math.min(1800, amount));
+  }
+
+  return normalized;
+}
+
+function normalizeWaitArgs(args) {
+  const ms = normalizeFiniteNumber(args.ms);
+  return {
+    ms: Math.max(250, Math.min(5000, ms || 1000))
+  };
+}
+
+function normalizeAskUserArgs(args) {
+  const question = normalizeRequiredString(args.question, 1000);
+  return question ? { question } : null;
 }
 
 export function summarizeAction(action) {
@@ -293,33 +392,28 @@ function extractJsonCandidate(text) {
   return trimmed.slice(firstBrace, lastBrace + 1);
 }
 
-function sanitizeArgs(args) {
-  if (!args || typeof args !== "object" || Array.isArray(args)) {
-    return {};
-  }
-
-  return Object.fromEntries(
-    Object.entries(args).map(([key, value]) => {
-      if (typeof value === "string") {
-        return [key, clampString(value, 4000)];
-      }
-      if (typeof value === "number") {
-        return [key, Number.isFinite(value) ? value : 0];
-      }
-      if (typeof value === "boolean") {
-        return [key, value];
-      }
-      if (Array.isArray(value)) {
-        return [key, value.slice(0, 20).map((item) => clampString(String(item), 200))];
-      }
-      return [key, value == null ? value : String(value)];
-    })
-  );
-}
-
 function firstString(...values) {
   const value = values.find((candidate) => typeof candidate === "string");
   return value || "";
+}
+
+function normalizeRef(value) {
+  const ref = normalizeRequiredString(value, 80);
+  return /^el-\d+$/.test(ref) ? ref : "";
+}
+
+function normalizeRequiredString(value, maxLength) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  return clampString(value, maxLength);
+}
+
+function normalizeFiniteNumber(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  return value;
 }
 
 function clampString(value, maxLength) {

@@ -71,6 +71,74 @@ test("normalizeActions caps action count and string size", () => {
   assert.equal(result[0].args.text.length, 4000);
 });
 
+test("normalizeActions validates required args per tool", () => {
+  const result = normalizeActions([
+    { tool: "click", args: { ref: "missing-prefix" } },
+    { tool: "navigate", args: { url: "" } },
+    { tool: "select", args: { ref: "el-1" } },
+    { tool: "ask_user", args: { question: "Choose an account?" } }
+  ]);
+
+  assert.deepEqual(result, [
+    { tool: "ask_user", args: { question: "Choose an account?" } }
+  ]);
+});
+
+test("normalizeActions keeps only supported args for each tool", () => {
+  const result = normalizeActions([
+    {
+      tool: "type",
+      args: {
+        ref: "el-2",
+        text: "hello",
+        submit: true,
+        replace: false,
+        ignored: "value"
+      }
+    },
+    {
+      tool: "scroll",
+      args: {
+        direction: "down",
+        amount: 9999,
+        ignored: "value"
+      }
+    },
+    {
+      tool: "wait",
+      args: {
+        ms: 25,
+        ignored: "value"
+      }
+    }
+  ]);
+
+  assert.deepEqual(result, [
+    {
+      tool: "type",
+      args: {
+        ref: "el-2",
+        text: "hello",
+        submit: true,
+        replace: false
+      }
+    },
+    {
+      tool: "scroll",
+      args: {
+        direction: "down",
+        amount: 1800
+      }
+    },
+    {
+      tool: "wait",
+      args: {
+        ms: 250
+      }
+    }
+  ]);
+});
+
 test("buildBrowserContext includes warnings, refs, text, and observations", () => {
   const context = buildBrowserContext(
     {
